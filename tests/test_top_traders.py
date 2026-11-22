@@ -194,3 +194,27 @@ async def test_position_history_exceeding_1000_is_fully_paginated(monkeypatch):
     assert len(await collector._positions("user", "CLOSED")) == 1025
     assert requests[0]["limit"] == 1000
     assert requests[1]["cursor"] == "page2"
+
+
+async def test_history_limit_is_counted_not_logged_as_error(monkeypatch):
+    from unittest.mock import Mock
+    import src.data.top_traders as module
+
+    collector = module.TopTraderCollector()
+    logger = Mock()
+    monkeypatch.setattr(module, "log", logger)
+
+    async def get_json(url, params):
+        if url == collector.POLYMARKET_PROFILE_API:
+            return {"data": [{"user_id": "a"}, {"user_id": "b"}]}
+        return {"data": {"all_time_pnl": {"trade_count": 100, "realized_market_pnl": 20000}}}
+
+    async def positions(user, status):
+        raise module.PositionHistoryLimitExceeded("Positions exceed pagination limit")
+
+    monkeypatch.setattr(collector, "_get_json", get_json)
+    monkeypatch.setattr(collector, "_positions", positions)
+    assert await collector._fetch_top_traders() == []
+    logger.warning.assert_not_called()
+    logger.info.assert_called_once_with("top_traders_collected", candidates=2, qualified=0,
+                                        skipped_history_limit=2)

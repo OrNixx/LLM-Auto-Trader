@@ -132,6 +132,10 @@ def compute_consensus(traders: list[TopTrader]) -> list[TraderConsensus]:
     return consensus_list[:10]
 
 
+class PositionHistoryLimitExceeded(ValueError):
+    """The bounded position history is incomplete."""
+
+
 class TopTraderCollector:
     """Fetches top trader data from Polymarket analytics."""
 
@@ -198,7 +202,7 @@ class TopTraderCollector:
                 if pagination.get("has_more"):
                     raise ValueError("Missing positions cursor")
                 return rows
-        raise ValueError("Positions exceed pagination limit")
+        raise PositionHistoryLimitExceeded("Positions exceed pagination limit")
 
     async def _fetch_top_traders(self) -> list[TopTrader]:
         """Enrich the leaderboard with verified account statistics and positions."""
@@ -212,8 +216,10 @@ class TopTraderCollector:
             return []
 
         semaphore = asyncio.Semaphore(5)
+        skipped_history_limit = 0
 
         async def enrich(item: dict) -> TopTrader | None:
+            nonlocal skipped_history_limit
             async with semaphore:
                 try:
                     user = item["user_id"]
@@ -260,12 +266,18 @@ class TopTraderCollector:
                     return TopTrader(username=item.get("user_name") or user,
                                      profit_total=profit, win_rate=win_rate,
                                      total_trades=trades, active_positions=positions)
+                except PositionHistoryLimitExceeded:
+                    skipped_history_limit += 1
+                    return None
                 except (KeyError, TypeError, ValueError, aiohttp.ClientError, asyncio.TimeoutError) as e:
                     log.warning("top_trader_enrichment_failed", error=str(e))
                     return None
 
         enriched = await asyncio.gather(*(enrich(item) for item in items if isinstance(item, dict)))
-        return [trader for trader in enriched if trader is not None]
+        traders = [trader for trader in enriched if trader is not None]
+        log.info("top_traders_collected", candidates=len(items), qualified=len(traders),
+                 skipped_history_limit=skipped_history_limit)
+        return traders
 
     async def close(self) -> None:
         if self._owns_session and self._session:
