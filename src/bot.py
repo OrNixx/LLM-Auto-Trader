@@ -187,6 +187,7 @@ class TradingBot:
             daily_peak=self.daily_peak,
             margin_monitor=lambda: self._latest_margin_state,
             system_prompt=render_system_prompt_for(settings),
+            llm_log_file=settings.llm_log_file,
         )
 
         # Storage
@@ -881,5 +882,6 @@ class TradingBot:
         if self._http_session:
             await self._http_session.close()
         await self.db.close()
+        self.llm_client.close()
 
         log.info("bot_shutdown_complete")

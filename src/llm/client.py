@@ -7,6 +7,8 @@ budget-gate, and memory hooks the rest of the bot depends on.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from src.data.aggregator import MarketSnapshot
 from src.llm.context_builder import ContextBuilder
 from src.llm.cost_tracker import CostTracker
@@ -26,6 +28,7 @@ from src.llm.response_parser import (
     parse_llm_response,
 )
 from src.llm.scheduler import LLMScheduler
+from src.llm.trace_log import LLMTraceLog
 from src.utils.errors import (
     LLMBudgetExceededError,
     LLMParseError,
@@ -58,6 +61,7 @@ class TradingLLMClient:
         daily_peak: object | None = None,
         margin_monitor: object | None = None,
         system_prompt: str | None = None,
+        llm_log_file: str = "",
     ):
         if provider is None:
             if llm_settings is None:
@@ -66,6 +70,7 @@ class TradingLLMClient:
                 )
             provider = build_provider(llm_settings)
 
+        self._trace_log = LLMTraceLog(llm_log_file) if llm_log_file else None
         self._provider = provider
         self._max_output_tokens = max_output_tokens
         self._temperature = temperature
@@ -157,11 +162,13 @@ class TradingLLMClient:
         return result
 
     async def _call_api(self, user_prompt: str) -> str:
-        log.debug(
-            "llm_request", model=self.model, system=self._system_prompt,
-            user=user_prompt, max_output_tokens=self._max_output_tokens,
-            temperature=self._temperature,
-        )
+        request_id = uuid4().hex
+        if self._trace_log:
+            self._trace_log.write(
+                "llm_request", request_id=request_id, model=self.model,
+                system=self._system_prompt, user=user_prompt,
+                max_output_tokens=self._max_output_tokens, temperature=self._temperature,
+            )
         try:
             res = await self._provider.complete(
                 system=self._system_prompt,
@@ -176,7 +183,8 @@ class TradingLLMClient:
             self._consecutive_failures += 1
             raise LLMParseError(str(e)) from e
 
-        log.debug("llm_response", model=res.model, text=res.text)
+        if self._trace_log:
+            self._trace_log.write("llm_response", request_id=request_id, model=res.model, text=res.text)
 
         self.cost_tracker.record_call(
             input_tokens=res.usage.input_tokens,
@@ -207,6 +215,10 @@ class TradingLLMClient:
 
         self._consecutive_failures += 1
         raise error
+
+    def close(self) -> None:
+        if self._trace_log:
+            self._trace_log.close()
 
     @property
     def consecutive_failures(self) -> int:

@@ -433,6 +433,7 @@ class Settings:
     bot_mode: str = field(default_factory=lambda: _env("BOT_MODE", default="paper"))
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", default="INFO"))
     log_dir: str = field(default_factory=lambda: _env("LOG_DIR", default="logs"))
+    llm_log_file: str = field(default_factory=lambda: _env("LLM_LOG_FILE"))
 
     paper_initial_balance: float = field(default_factory=lambda: float(_env("PAPER_INITIAL_BALANCE", default="10000")))
 

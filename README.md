@@ -597,9 +597,9 @@ actual results. Keep DB_PATH and LOG_DIR inside the mounted directories and
 ensure the host directories are writable by the container.
 
 
-To inspect each model request and its raw text response, set `LOG_LEVEL=DEBUG`
-and recreate the container. Events `llm_request` and `llm_response` include
-retries; request events contain the system and user prompts, token limit and
-temperature. Logs go to both Docker logs and `LOG_DIR/bot.log`. They can
-contain account and position details and grow quickly; use `INFO` when done.
-The database stores the validated response, not the full request or raw output.
+To record model requests and raw responses independently of `LOG_LEVEL`, set
+`LLM_LOG_FILE=/app/logs/llm.jsonl` in Docker and recreate the container. Leave it
+empty to disable tracing. Each JSON Lines event has a request ID; retries are
+recorded separately. The file rotates at 50 MiB with five backups. Prompts can
+contain account and position details. The database stores the validated response,
+not the full request or raw output.
