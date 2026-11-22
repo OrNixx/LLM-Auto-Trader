@@ -9,6 +9,7 @@ env names are still honored so existing setups don't break.
 from __future__ import annotations
 
 import os
+import math
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
@@ -434,6 +435,7 @@ class Settings:
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", default="INFO"))
     log_dir: str = field(default_factory=lambda: _env("LOG_DIR", default="logs"))
     llm_log_file: str = field(default_factory=lambda: _env("LLM_LOG_FILE"))
+    news_max_age_hours: float = field(default_factory=lambda: float(_env("NEWS_MAX_AGE_HOURS", default="48")))
 
     paper_initial_balance: float = field(default_factory=lambda: float(_env("PAPER_INITIAL_BALANCE", default="10000")))
 
@@ -455,6 +457,8 @@ class Settings:
             )
         if self.scheduler.cadence not in ("adaptive", "daily", "hourly", "5m"):
             errors.append("REBALANCE_CADENCE must be adaptive, 5m, daily, or hourly")
+        if not math.isfinite(self.news_max_age_hours) or self.news_max_age_hours <= 0:
+            errors.append("NEWS_MAX_AGE_HOURS must be a positive finite number")
         if self.paper_initial_balance <= 0:
             errors.append("PAPER_INITIAL_BALANCE must be positive")
         if not self.llm.api_key and self.llm.provider not in ("openai-compat", "openai_compat", "ollama", "vllm"):

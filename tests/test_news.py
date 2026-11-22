@@ -160,3 +160,88 @@ class TestNewsSnapshot:
         assert len(snap.articles) == 2
         assert snap.category_counts["crypto"] == 2
         assert snap.sentiment_summary["bullish"] == 2
+
+
+def test_freshness_filters_dates_and_rebuilds_sentiment():
+    from datetime import datetime, timezone
+    from src.data.news import filter_news_snapshot
+
+    now = datetime(2026, 11, 23, 12, tzinfo=timezone.utc)
+    fresh = _make_article("Bitcoin rally today", sentiment="bullish")
+    fresh.published_at = "Mon, 23 Nov 2026 13:00:00 +0200"
+    border = _make_article("Ethereum crash yesterday", sentiment="bearish")
+    border.published_at = "2026-11-21T12:00:00Z"
+    old = _make_article("Bitcoin older crash", sentiment="bearish")
+    old.published_at = "2026-11-21T11:59:59Z"
+    missing = _make_article("Crypto without date", sentiment="bearish")
+    missing.published_at = "2026-11-23T11:00:00"
+    future = _make_article("Crypto future report", sentiment="bullish")
+    future.published_at = "2026-11-23T12:00:01Z"
+    snapshot = filter_news_snapshot([fresh, border, old, missing, future], 48, now)
+    assert {a.title for a in snapshot.articles} == {fresh.title, border.title}
+    assert snapshot.sentiment_summary == {"bullish": 1, "bearish": 1, "neutral": 0}
+    expired = filter_news_snapshot(snapshot.articles, 48, now.replace(hour=13))
+    assert [a.title for a in expired.articles] == [fresh.title]
+    assert expired.sentiment_summary["bearish"] == 0
+
+
+def test_publication_time_formats_and_invalid():
+    from datetime import datetime, timezone
+    from src.data.news import parse_publication_time
+
+    expected = datetime(2026, 11, 23, 12, tzinfo=timezone.utc)
+    assert parse_publication_time("2026-11-23T14:00:00+02:00") == expected
+    assert parse_publication_time(str(expected.timestamp())) == expected
+    assert parse_publication_time("Mon, 23 Nov 2026 12:00:00 GMT") == expected
+    assert parse_publication_time("2026-11-23 12:00:00") is None
+    assert parse_publication_time("not a date") is None
+    assert parse_publication_time("99999999999999999999999999999999999") is None
+
+
+def test_prompt_contains_utc_publication_and_age():
+    from datetime import datetime, timedelta, timezone
+    from src.data.aggregator import MarketSnapshot
+    from src.data.news import filter_news_snapshot
+    from src.llm.context_builder import ContextBuilder
+
+    article = _make_article("BTC rallies today", sentiment="bullish")
+    article.published_at = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    news = filter_news_snapshot([article], 48)
+    text = ContextBuilder()._format_news(MarketSnapshot(news=news))
+    assert "UTC" in text and "2.0h ago" in text and "BTC rallies today" in text
+
+
+async def test_cached_news_and_sentiment_are_refiltered_each_cycle():
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from src.data.aggregator import DataAggregator
+    from src.data.sentiment import NewsItem, SentimentSnapshot
+
+    aggregator = DataAggregator(market=None, websocket=SimpleNamespace(), onchain=None,
+                                sentiment=None, macro=None, paper_mode=True,
+                                news_max_age_hours=48)
+    old = _make_article("BTC old crash", sentiment="bearish")
+    old.published_at = (datetime.now(timezone.utc) - timedelta(hours=49)).isoformat()
+    fresh = _make_article("ETH recent rally", sentiment="bullish")
+    fresh.published_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    aggregator._cached_news = NewsSnapshot(articles=[old, fresh], sentiment_summary={"bearish": 1})
+    aggregator._cached_sentiment = SentimentSnapshot(top_news=[
+        NewsItem(title="old", source="source", sentiment="bearish", published_at=old.published_at),
+        NewsItem(title="fresh", source="source", sentiment="bullish", published_at=fresh.published_at),
+    ])
+    snapshot = await aggregator.collect_snapshot(fetch_sentiment=False)
+    assert [a.title for a in snapshot.news.articles] == [fresh.title]
+    assert snapshot.news.sentiment_summary["bearish"] == 0
+    assert [a.title for a in snapshot.sentiment.top_news] == ["fresh"]
+    assert len(aggregator._cached_news.articles) == 2
+
+
+def test_news_age_setting_default_override_and_validation(monkeypatch):
+    from config.settings import Settings
+
+    monkeypatch.delenv("NEWS_MAX_AGE_HOURS", raising=False)
+    assert Settings().news_max_age_hours == 48
+    monkeypatch.setenv("NEWS_MAX_AGE_HOURS", "6")
+    assert Settings().news_max_age_hours == 6
+    monkeypatch.setenv("NEWS_MAX_AGE_HOURS", "0")
+    assert any("NEWS_MAX_AGE_HOURS" in error for error in Settings().validate())

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from math import isfinite
 from numbers import Real
 
@@ -12,6 +13,7 @@ from src.analysis.microstructure import MicrostructureFeatures, compute_microstr
 from src.analysis.regime import MarketRegime, classify_regime
 from src.analysis.statistics import StatisticalFeatures, compute_statistics
 from src.data.aggregator import MarketSnapshot
+from src.data.news import parse_publication_time
 
 
 @dataclass
@@ -507,7 +509,9 @@ class ContextBuilder:
         if s.top_news:
             lines.append("Top headlines:")
             for i, news in enumerate(s.top_news[:3], 1):
-                lines.append(f"  {i}. [{news.sentiment}] {news.title} ({news.source})")
+                published = parse_publication_time(news.published_at)
+                if published:
+                    lines.append(f"  {i}. [{news.sentiment}] {published:%Y-%m-%d %H:%M} UTC {news.title} ({news.source})")
         return "\n".join(lines) if len(lines) > 1 else ""
 
     def _format_macro(self, snapshot: MarketSnapshot) -> str:
@@ -625,7 +629,11 @@ class ContextBuilder:
         # Top headlines
         for art in news.articles[:8]:
             sent_tag = f"[{art.sentiment}]" if art.sentiment else ""
-            lines.append(f"  {sent_tag} {art.title[:90]} ({art.source})")
+            published = parse_publication_time(art.published_at)
+            if published is None:
+                continue
+            age_hours = max(0, (datetime.now(timezone.utc) - published).total_seconds() / 3600)
+            lines.append(f"  {sent_tag} {published:%Y-%m-%d %H:%M} UTC ({age_hours:.1f}h ago) {art.title[:90]} ({art.source})")
 
         return "\n".join(lines)
 

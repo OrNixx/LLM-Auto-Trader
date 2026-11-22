@@ -293,6 +293,7 @@ class TradingBot:
             cryptopanic_api_key=getattr(self.settings, 'cryptopanic_api_key', ''),
             newsdata_api_key=getattr(self.settings, 'newsdata_api_key', ''),
             gnews_api_key=getattr(self.settings, 'gnews_api_key', ''),
+            max_age_hours=self.settings.news_max_age_hours,
             session=self._http_session,
         )
 
@@ -308,6 +309,7 @@ class TradingBot:
             news=self.news,
             symbols=self._symbols,
             paper_mode=not self.settings.is_live,
+            news_max_age_hours=self.settings.news_max_age_hours,
         )
 
         # Executor

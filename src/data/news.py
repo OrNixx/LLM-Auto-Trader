@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import time
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -80,6 +83,64 @@ class NewsSnapshot:
     timestamp: float = field(default_factory=time.time)
 
 
+
+def parse_publication_time(value: str) -> datetime | None:
+    """Parse a timestamp only when its time zone is known (or it is Unix UTC)."""
+    if not value or not isinstance(value, str):
+        return None
+    text = value.strip()
+    try:
+        if text.replace(".", "", 1).isdigit():
+            timestamp = float(text)
+            if not math.isfinite(timestamp) or timestamp <= 0:
+                return None
+            return datetime.fromtimestamp(timestamp, timezone.utc)
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = parsedate_to_datetime(text)
+        if parsed is None or parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, TypeError, OverflowError, OSError):
+        return None
+
+
+def filter_news_snapshot(articles: list[NewsArticle], max_age_hours: float,
+                         now: datetime | None = None) -> NewsSnapshot:
+    """Filter and summarize the exact same dated articles presented to the LLM."""
+    now = now or datetime.now(timezone.utc)
+    fresh = []
+    missing = stale = future = 0
+    for article in articles:
+        published = parse_publication_time(article.published_at)
+        if published is None:
+            missing += 1
+            continue
+        age = (now - published).total_seconds()
+        if age < 0:
+            future += 1
+            continue
+        if age > max_age_hours * 3600:
+            stale += 1
+            continue
+        fresh.append((article, published))
+    # Prefer relevant stories and use publication time to break ties.
+    fresh.sort(key=lambda item: (item[0].relevance_score, item[1]), reverse=True)
+    relevant = [article for article, _ in fresh if article.relevance_score > 0.15]
+    unique = deduplicate(relevant)[:50]
+    counts: dict[str, int] = {}
+    sentiments = {"bullish": 0, "bearish": 0, "neutral": 0}
+    for article in unique:
+        counts[article.category] = counts.get(article.category, 0) + 1
+        if article.sentiment in sentiments:
+            sentiments[article.sentiment] += 1
+    log.info("news_freshness", received=len(articles), stale=stale, missing_date=missing,
+             future_date=future, eligible=len(unique), max_prompt_headlines=min(len(unique), 8))
+    return NewsSnapshot(articles=unique, category_counts=counts,
+                        sentiment_summary=sentiments, top_headlines=[a.title for a in unique[:10]])
+
+
 def compute_relevance_score(text: str) -> float:
     """Score 0-1 based on keyword matches."""
     t = text.lower()
@@ -153,7 +214,9 @@ class NewsCollector:
         newsdata_api_key: str = "",
         gnews_api_key: str = "",
         session: aiohttp.ClientSession | None = None,
+        max_age_hours: float = 48,
     ):
+        self.max_age_hours = max_age_hours
         self._cryptopanic_key = cryptopanic_api_key
         self._newsdata_key = newsdata_api_key
         self._gnews_key = gnews_api_key
@@ -201,29 +264,7 @@ class NewsCollector:
             if result:
                 all_articles.extend(result)
 
-        # Filter by relevance
-        relevant = [a for a in all_articles if a.relevance_score > 0.15]
-
-        # Deduplicate
-        unique = deduplicate(relevant)
-
-        # Sort by relevance
-        unique.sort(key=lambda a: a.relevance_score, reverse=True)
-
-        # Build snapshot
-        cat_counts: dict[str, int] = {}
-        sent_counts: dict[str, int] = {"bullish": 0, "bearish": 0, "neutral": 0}
-        for a in unique:
-            cat_counts[a.category] = cat_counts.get(a.category, 0) + 1
-            if a.sentiment:
-                sent_counts[a.sentiment] = sent_counts.get(a.sentiment, 0) + 1
-
-        return NewsSnapshot(
-            articles=unique[:50],
-            category_counts=cat_counts,
-            sentiment_summary=sent_counts,
-            top_headlines=[a.title for a in unique[:10]],
-        )
+        return filter_news_snapshot(all_articles, self.max_age_hours)
 
     async def _safe_fetch(self, fn, *args) -> list[NewsArticle] | None:
         """Wrap fetch in timeout + error handling."""
@@ -260,7 +301,7 @@ class NewsCollector:
                 source=source_name,
                 category=categorize_news(title),
                 sentiment=classify_sentiment(title + " " + (summary_text or "")),
-                published_at=entry.get("published", ""),
+                published_at=entry.get("published") or entry.get("updated") or "",
                 url=entry.get("link"),
                 summary=summary_text,
                 relevance_score=relevance,

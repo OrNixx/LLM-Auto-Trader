@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
+from datetime import datetime, timezone
 
 from src.data.macro import MacroCollector, MacroSnapshot
 from src.data.market import FundingData, MarketDataCollector, OrderBookSummary, TickerData
-from src.data.news import NewsCollector, NewsSnapshot
+from src.data.news import NewsCollector, NewsSnapshot, filter_news_snapshot, parse_publication_time
 from src.data.onchain import OnChainCollector, OnChainSnapshot
 from src.data.prediction_markets import PredictionMarketsCollector, PredictionMarketsSnapshot
 from src.data.sentiment import SentimentCollector, SentimentSnapshot
@@ -79,6 +80,7 @@ class DataAggregator:
         news: NewsCollector | None = None,
         symbols: list[str] | None = None,
         paper_mode: bool = False,
+        news_max_age_hours: float = 48,
     ):
         self._market = market
         self._websocket = websocket
@@ -90,6 +92,7 @@ class DataAggregator:
         self._news = news
         self._symbols = symbols or []
         self._paper_mode = paper_mode
+        self._news_max_age_hours = news_max_age_hours
 
         # Cache for slow-updating data
         self._cached_onchain: OnChainSnapshot | None = None
@@ -235,10 +238,19 @@ class DataAggregator:
         # Use cached values for unfetched slow data
         snapshot.onchain = self._cached_onchain
         snapshot.sentiment = self._cached_sentiment
+        if snapshot.sentiment is not None:
+            now = datetime.now(timezone.utc)
+            fresh_news = []
+            for item in snapshot.sentiment.top_news:
+                published = parse_publication_time(item.published_at)
+                if published is not None and 0 <= (now - published).total_seconds() <= self._news_max_age_hours * 3600:
+                    fresh_news.append(item)
+            snapshot.sentiment = replace(snapshot.sentiment, top_news=fresh_news)
         snapshot.macro = self._cached_macro
         snapshot.prediction_markets = self._cached_prediction_markets
         snapshot.top_traders = self._cached_top_traders
-        snapshot.news = self._cached_news
+        snapshot.news = (filter_news_snapshot(self._cached_news.articles, self._news_max_age_hours)
+                         if self._cached_news is not None else None)
         snapshot.errors = errors
 
         # Enrich with WS real-time prices where available

@@ -603,3 +603,9 @@ empty to disable tracing. Each JSON Lines event has a request ID; retries are
 recorded separately. The file rotates at 50 MiB with five backups. Prompts can
 contain account and position details. The database stores the validated response,
 not the full request or raw output.
+
+News headlines older than `NEWS_MAX_AGE_HOURS` (default 48), future-dated
+headlines, and headlines without a timestamp with a known timezone are excluded.
+RSS uses publication time, or update time if publication time is missing.
+The filter is reapplied to cached headlines before each analysis; summaries
+and sentiment counts are rebuilt from the retained articles.
