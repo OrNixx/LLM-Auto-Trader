@@ -127,3 +127,40 @@ def test_reject_empty_key_factors():
     }"""
     with pytest.raises(LLMParseError):
         parse_llm_response(bad)
+
+
+def test_hold_accepts_zero_size():
+    import json
+    data = json.loads(HOLD_RESPONSE)
+    data["actions"][0]["size_pct"] = 0
+    assert parse_llm_response(json.dumps(data)).actions[0].size_pct == 0
+
+
+@pytest.mark.parametrize("action", ["open_long", "open_short", "close", "add_to_position",
+                                    "reduce_position", "adjust_sl", "adjust_tp"])
+@pytest.mark.parametrize("size", [0, 0.5, -1])
+def test_non_hold_rejects_size_below_one(action, size):
+    import json
+    data = json.loads(VALID_RESPONSE)
+    data["actions"][0].update(action=action, size_pct=size)
+    with pytest.raises(LLMParseError):
+        parse_llm_response(json.dumps(data))
+
+
+@pytest.mark.asyncio
+async def test_hold_zero_does_not_trigger_model_retry():
+    import json
+    from unittest.mock import AsyncMock, Mock
+    from src.data.aggregator import MarketSnapshot
+    from src.llm.client import TradingLLMClient
+    from tests.edge_cases.test_llm_providers import _MockProvider
+
+    data = json.loads(HOLD_RESPONSE)
+    data["actions"][0]["size_pct"] = 0
+    provider = _MockProvider(response_text=json.dumps(data))
+    provider.complete = AsyncMock(wraps=provider.complete)
+    client = TradingLLMClient(provider=provider)
+    client._context_builder.build = Mock(return_value={})
+    result = await client.analyze(MarketSnapshot())
+    assert result.actions[0].action == ActionType.HOLD
+    assert provider.complete.await_count == 1

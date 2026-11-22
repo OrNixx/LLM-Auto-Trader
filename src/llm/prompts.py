@@ -38,6 +38,7 @@ You MUST respond with valid JSON matching this exact schema. No markdown, no exp
 - Maximum leverage: {max_leverage}x per position
 - Maximum position size: 25% of equity per position
 - Maximum total exposure: 60% of equity across all positions
+- For hold, set size_pct to 0 or null; other actions require size_pct >= 1 when provided.
 - Stop loss: REQUIRED for every new position
 - Minimum reward:risk ratio: 1.5:1
 - Maximum 3 concurrent positions

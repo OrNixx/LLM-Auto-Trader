@@ -46,7 +46,7 @@ class TradeAction(BaseModel):
 
     action: ActionType
     symbol: str = Field(pattern=_SYMBOL_PATTERN)
-    size_pct: float | None = Field(default=None, ge=1, le=25)
+    size_pct: float | None = Field(default=None, ge=0, le=25)
     leverage: int | None = Field(default=None, ge=1, le=5)
     order_type: Literal["market", "limit"] = "market"
     entry_price: float | None = None
@@ -56,6 +56,8 @@ class TradeAction(BaseModel):
 
     @model_validator(mode="after")
     def validate_new_position_requirements(self) -> TradeAction:
+        if self.action != ActionType.HOLD and self.size_pct is not None and self.size_pct < 1:
+            raise ValueError("size_pct must be at least 1 for non-hold actions")
         if self.action in (ActionType.OPEN_LONG, ActionType.OPEN_SHORT):
             if self.stop_loss is None:
                 raise ValueError("stop_loss is required for new positions")
