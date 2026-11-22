@@ -219,7 +219,7 @@ class LLMSettings:
     )
 
     max_retries: int = 2
-    timeout_seconds: int = 60
+    timeout_seconds: int = field(default_factory=lambda: int(_env("LLM_TIMEOUT_SECONDS", default="60")))
 
 
 @dataclass(frozen=True)
@@ -434,6 +434,8 @@ class Settings:
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", default="INFO"))
     log_dir: str = field(default_factory=lambda: _env("LOG_DIR", default="logs"))
 
+    paper_initial_balance: float = field(default_factory=lambda: float(_env("PAPER_INITIAL_BALANCE", default="10000")))
+
     onchain_interval: int = 21600
     sentiment_interval: int = 900
     macro_interval: int = 14400
@@ -450,7 +452,11 @@ class Settings:
                 "Exchange API key required for live trading. Set "
                 "EXCHANGE_API_KEY (or the legacy MEXC_API_KEY) in your .env."
             )
-        if not self.llm.api_key:
+        if self.scheduler.cadence not in ("adaptive", "daily", "hourly"):
+            errors.append("REBALANCE_CADENCE must be adaptive, daily, or hourly")
+        if self.paper_initial_balance <= 0:
+            errors.append("PAPER_INITIAL_BALANCE must be positive")
+        if not self.llm.api_key and self.llm.provider not in ("openai-compat", "openai_compat", "ollama", "vllm"):
             errors.append(
                 f"LLM API key required for provider '{self.llm.provider}'. "
                 f"Set LLM_API_KEY (or the provider-specific equivalent: "

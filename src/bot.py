@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from dataclasses import asdict
 import signal
 import time
 from datetime import datetime, timezone
@@ -25,7 +27,7 @@ from src.data.stablecoin import USDTMonitor
 from src.data.top_traders import TopTraderCollector
 from src.data.websocket import WebSocketManager
 from src.execution.executor import TradeExecutor
-from src.execution.position_manager import PositionManager
+from src.execution.position_manager import Position, PositionManager
 from src.llm.client import TradingLLMClient
 from src.llm.cost_tracker import CostTracker
 from src.llm.memory import TradingMemory
@@ -62,16 +64,16 @@ class TradingBot:
         # Data
         self.market = MarketDataCollector(
             trading_exchange_id=settings.exchange.name,
-            trading_api_key=settings.exchange.api_key,
-            trading_secret=settings.exchange.secret,
+            trading_api_key=settings.exchange.api_key if settings.is_live else "",
+            trading_secret=settings.exchange.secret if settings.is_live else "",
             data_exchange_ids=settings.exchange.data_exchanges,
             market_type=settings.exchange.market_type,
             quote_currency=settings.exchange.quote_currency,
         )
         self.websocket = WebSocketManager(
             exchange_id=settings.exchange.name,
-            api_key=settings.exchange.api_key,
-            secret=settings.exchange.secret,
+            api_key=settings.exchange.api_key if settings.is_live else "",
+            secret=settings.exchange.secret if settings.is_live else "",
             market_type=settings.exchange.market_type,
         )
         self.onchain = OnChainCollector()
@@ -83,7 +85,7 @@ class TradingBot:
         self.news: NewsCollector | None = None
 
         # Position & Risk
-        self.position_manager = PositionManager()
+        self.position_manager = PositionManager(record_closed_trades=not settings.is_live)
         self.position_sizer = PositionSizer(
             taker_fee=settings.exchange.taker_fee,
         )
@@ -166,6 +168,7 @@ class TradingBot:
             min_interval=settings.llm.min_interval,
             max_interval=settings.llm.max_interval,
             default_no_position=settings.llm.default_no_position,
+            cadence=settings.scheduler.cadence,
         )
         from src.llm.client import render_system_prompt_for
         self.llm_client = TradingLLMClient(
@@ -211,6 +214,44 @@ class TradingBot:
         self._last_retention_cleanup: float = 0
         self._daily_start_equity: float = 0
         self._current_day: str = ""
+        self._paper_cash = settings.paper_initial_balance
+
+    async def _balance(self) -> dict:
+        if self.settings.is_live:
+            return await self.market.fetch_balance()
+        used = sum(p.notional / p.leverage for p in self.position_manager.open_positions)
+        cash = self._paper_cash + sum(t["pnl"] for t in self.position_manager.closed_trades)
+        return {"total": cash, "free": max(0.0, cash - used),
+                "used": used, "currency": self.settings.exchange.quote_currency}
+
+    async def _load_paper_state(self) -> None:
+        await self.db.db.execute("CREATE TABLE IF NOT EXISTS paper_state (id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL)")
+        await self.db.db.commit()
+        cursor = await self.db.db.execute("SELECT state FROM paper_state WHERE id=1")
+        row = await cursor.fetchone()
+        if row:
+            state = json.loads(row[0])
+            self._paper_cash = state["cash"]
+            self.position_manager._positions = {p["symbol"]: Position(**p) for p in state["positions"]}
+            self.position_manager._peak_equity = state.get("peak_equity", self._paper_cash)
+        else:
+            await self._save_paper_state()
+
+    async def _save_paper_state(self) -> None:
+        trades = list(self.position_manager.closed_trades)
+        cash = self._paper_cash + sum(t["pnl"] for t in trades)
+        state = {"cash": cash, "positions": [asdict(p) for p in self.position_manager.open_positions],
+                 "peak_equity": self.position_manager.peak_equity}
+        try:
+            for trade in trades:
+                await self.db.save_trade(trade, commit=False)
+            await self.db.db.execute("INSERT OR REPLACE INTO paper_state (id, state) VALUES (1, ?)", (json.dumps(state),))
+            await self.db.db.commit()
+        except Exception:
+            await self.db.db.rollback()
+            raise
+        self._paper_cash = cash
+        del self.position_manager.closed_trades[:len(trades)]
 
     async def initialize(self) -> None:
         """Initialize all components and sync state."""
@@ -265,6 +306,7 @@ class TradingBot:
             top_traders=self.top_traders,
             news=self.news,
             symbols=self._symbols,
+            paper_mode=not self.settings.is_live,
         )
 
         # Executor
@@ -275,12 +317,13 @@ class TradingBot:
             taker_fee=self.settings.exchange.taker_fee,
         )
 
-        # Sync positions from exchange
-        exchange_positions = await self.market.fetch_positions()
-        self.position_manager.sync_from_exchange(exchange_positions)
+        if self.settings.is_live:
+            exchange_positions = await self.market.fetch_positions()
+            self.position_manager.sync_from_exchange(exchange_positions)
+        else:
+            await self._load_paper_state()
 
-        # Set starting equity
-        balance = await self.market.fetch_balance()
+        balance = await self._balance()
         equity = balance.get("total", 0)
         self.position_manager.set_starting_equity(equity)
         self.memory.set_starting_capital(equity)
@@ -342,8 +385,13 @@ class TradingBot:
                         )
                         self.circuit_breakers._halt_trading(3600)  # 1h halt
 
+                if not self.settings.is_live:
+                    await self._save_paper_state()
+
                 # Wait for next tick or shutdown
                 wait_seconds = self._get_sleep_time()
+                if wait_seconds <= 0:
+                    wait_seconds = 30
                 try:
                     await asyncio.wait_for(
                         self._shutdown_event.wait(),
@@ -366,7 +414,7 @@ class TradingBot:
             if self._current_day:
                 await self._end_of_day()
             self._current_day = today
-            balance = await self.market.fetch_balance()
+            balance = await self._balance()
             self._daily_start_equity = balance.get("total", 0)
 
         # --- 2. Update prices from WebSocket ---
@@ -380,11 +428,14 @@ class TradingBot:
         # --- 3. Check SL/TP hits ---
         sl_hits = self.position_manager.check_stop_losses(ws_prices)
         for sym in sl_hits:
-            price = ws_prices.get(sym, 0)
+            if sym not in ws_prices:
+                continue
+            price = ws_prices[sym]
             trade = self.position_manager.close_position(sym, price, 0)
             if trade:
                 self.memory.record_trade(trade)
-                await self.db.save_trade(trade)
+                if self.settings.is_live:
+                    await self.db.save_trade(trade)
                 self.circuit_breakers.record_loss(trade.get("pnl_pct", 0) / 100)
                 # Phase 3 §3B.9 — record SL for cooldown
                 afml_cfg = getattr(self.settings, "afml", None)
@@ -402,11 +453,14 @@ class TradingBot:
 
         tp_hits = self.position_manager.check_take_profits(ws_prices)
         for sym in tp_hits:
-            price = ws_prices.get(sym, 0)
+            if sym not in ws_prices:
+                continue
+            price = ws_prices[sym]
             trade = self.position_manager.close_position(sym, price, 0)
             if trade:
                 self.memory.record_trade(trade)
-                await self.db.save_trade(trade)
+                if self.settings.is_live:
+                    await self.db.save_trade(trade)
                 await self.telegram.notify_trade_close(
                     symbol=sym, side=trade["side"],
                     entry_price=trade["entry_price"], exit_price=price,
@@ -416,7 +470,7 @@ class TradingBot:
                 )
 
         # --- 4. Circuit breaker checks ---
-        balance = await self.market.fetch_balance()
+        balance = await self._balance()
         equity = balance.get("total", 0) + self.position_manager.total_unrealized_pnl
         self.position_manager.update_equity(equity)
 
@@ -487,7 +541,8 @@ class TradingBot:
                     trade = self.position_manager.close_position(worst.symbol, price, 0)
                     if trade:
                         self.memory.record_trade(trade)
-                        await self.db.save_trade(trade)
+                        if self.settings.is_live:
+                            await self.db.save_trade(trade)
             except Exception as e:
                 # Silent-failure-hunter P0 #1: don't swallow — set state to None
                 # (forces context_builder to omit ACCOUNT_MARGIN) and escalate.
@@ -592,7 +647,9 @@ class TradingBot:
             budget_ok=self.cost_tracker.can_afford_call(),
         )
 
-        if should_call and not self.circuit_breakers.is_trading_halted:
+        if should_call:
+            # Risk validation still rejects entries while halted; analysis can
+            # recover a provider whose failures triggered the halt.
             await self._run_llm_analysis(equity)
 
         # --- 6. Periodic tasks ---
@@ -622,6 +679,9 @@ class TradingBot:
         fetch_tt = (now - self._last_top_traders_fetch) > 1800          # every 30 min
         fetch_news = (now - self._last_news_fetch) > 300                # every 5 min
 
+        # Record attempts as well as successes, preventing a tight retry loop.
+        self.scheduler.record_call()
+
         # Collect ALL data concurrently
         snapshot = await self.aggregator.collect_snapshot(
             fetch_onchain=fetch_onchain,
@@ -642,6 +702,10 @@ class TradingBot:
             self._last_top_traders_fetch = now
         if fetch_news:
             self._last_news_fetch = now
+
+        if not self.settings.is_live:
+            snapshot.balance = await self._balance()
+            snapshot.positions = self.position_manager.positions_for_prompt()
 
         if not snapshot.has_critical_data:
             log.warning("insufficient_data_for_llm")
@@ -724,6 +788,9 @@ class TradingBot:
                     max_holding_s=max_holding,
                 )
 
+                if not self.settings.is_live and result.success:
+                    await self._save_paper_state()
+
                 if result.success and action.action in (
                     ActionType.OPEN_LONG, ActionType.OPEN_SHORT
                 ):
@@ -748,7 +815,7 @@ class TradingBot:
 
     async def _end_of_day(self) -> None:
         """End-of-day tasks: save summary, send report."""
-        balance = await self.market.fetch_balance()
+        balance = await self._balance()
         equity = balance.get("total", 0) + self.position_manager.total_unrealized_pnl
         pnl = equity - self._daily_start_equity
         pnl_pct = pnl / self._daily_start_equity if self._daily_start_equity else 0

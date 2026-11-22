@@ -103,15 +103,24 @@ class OpenAICompatProvider(BaseLLMProvider):
             data = response.json()
         except (httpx.TimeoutException, asyncio.TimeoutError) as e:
             raise LLMTimeoutError(f"OpenAI-compat timeout: {e}") from e
+        except ValueError as e:
+            raise LLMProviderError("OpenAI-compat returned invalid JSON") from e
         except (httpx.HTTPError, httpx.RequestError) as e:
             raise LLMProviderError(f"OpenAI-compat HTTP error: {e}") from e
 
+        if not isinstance(data, dict):
+            raise LLMProviderError("OpenAI-compat response is not a JSON object")
         choices = data.get("choices") or []
         if not choices:
             raise LLMProviderError(
                 f"OpenAI-compat returned no choices: {str(data)[:300]}"
             )
-        text = choices[0].get("message", {}).get("content") or ""
+        try:
+            text = choices[0]["message"]["content"]
+        except (KeyError, TypeError, IndexError) as e:
+            raise LLMProviderError("OpenAI-compat response has no message content") from e
+        if not isinstance(text, str) or not text.strip():
+            raise LLMProviderError("OpenAI-compat response has empty or non-text content")
 
         usage_dict = data.get("usage") or {}
         return LLMCallResult(

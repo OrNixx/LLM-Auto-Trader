@@ -29,12 +29,7 @@ def main() -> None:
     settings = load_settings()
     errors = settings.validate()
 
-    if any("LLM API key" in e for e in errors):
-        print("ERROR: An LLM API key is required even for paper trading.")
-        print(
-            "Set LLM_API_KEY in .env (or the provider-specific equivalent: "
-            "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY)."
-        )
+    if errors:
         sys.exit(1)
 
     print("Starting paper trading bot...")

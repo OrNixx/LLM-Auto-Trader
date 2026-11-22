@@ -24,7 +24,11 @@ class LLMScheduler:
         min_interval: int = 300,         # 5 min
         max_interval: int = 3600,        # 60 min
         default_no_position: int = 1800,  # 30 min
+        cadence: str = "adaptive",
     ):
+        self.cadence = cadence
+        if cadence not in ("adaptive", "daily", "hourly"):
+            raise ValueError(f"Unsupported cadence: {cadence}")
         self.base_interval = base_interval
         self.min_interval = min_interval
         self.max_interval = max_interval
@@ -73,6 +77,8 @@ class LLMScheduler:
             budget_ok: Whether we're within API budget
         """
         elapsed = self.seconds_since_last_call
+        if self.cadence != "adaptive":
+            return elapsed >= (86400 if self.cadence == "daily" else 3600)
 
         # Force call (event-driven trigger)
         if self._force_next and elapsed >= self.min_interval:
@@ -125,6 +131,8 @@ class LLMScheduler:
         budget_ok: bool = True,
     ) -> float:
         """Get seconds until next call should happen."""
+        if self.cadence != "adaptive":
+            return max(0, (86400 if self.cadence == "daily" else 3600) - self.seconds_since_last_call)
         if self._force_next:
             return max(0, self.min_interval - self.seconds_since_last_call)
 

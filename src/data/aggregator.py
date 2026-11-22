@@ -78,6 +78,7 @@ class DataAggregator:
         top_traders: TopTraderCollector | None = None,
         news: NewsCollector | None = None,
         symbols: list[str] | None = None,
+        paper_mode: bool = False,
     ):
         self._market = market
         self._websocket = websocket
@@ -88,6 +89,7 @@ class DataAggregator:
         self._top_traders = top_traders
         self._news = news
         self._symbols = symbols or []
+        self._paper_mode = paper_mode
 
         # Cache for slow-updating data
         self._cached_onchain: OnChainSnapshot | None = None
@@ -132,8 +134,8 @@ class DataAggregator:
             }
 
         # Account data
-        balance_task = self._market.fetch_balance()
-        positions_task = self._market.fetch_positions()
+        balance_task = self._market.fetch_balance() if not self._paper_mode else None
+        positions_task = self._market.fetch_positions() if not self._paper_mode else None
 
         # Auxiliary data (conditional) — all run concurrently
         onchain_task = self._onchain.collect() if fetch_onchain else None
@@ -155,10 +157,11 @@ class DataAggregator:
                 all_coros.append(coro)
                 coro_labels.append((sym, label))
 
-        all_coros.append(balance_task)
-        coro_labels.append(("_account", "balance"))
-        all_coros.append(positions_task)
-        coro_labels.append(("_account", "positions"))
+        if balance_task is not None:
+            all_coros.append(balance_task)
+            coro_labels.append(("_account", "balance"))
+            all_coros.append(positions_task)
+            coro_labels.append(("_account", "positions"))
 
         if onchain_task:
             all_coros.append(onchain_task)

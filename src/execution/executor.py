@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import math
 from dataclasses import dataclass
 
 import ccxt.async_support as ccxt
@@ -74,6 +75,17 @@ class TradeExecutor:
                 error=f"Rejected: {validation.rejection_reason}",
             )
 
+        if action.action in (ActionType.OPEN_LONG, ActionType.OPEN_SHORT, ActionType.CLOSE,
+                              ActionType.ADD_TO_POSITION, ActionType.REDUCE_POSITION) and (
+                not math.isfinite(current_price) or current_price <= 0):
+            return ExecutionResult(success=False, action=action.action.value, symbol=action.symbol,
+                                   side="", error="No valid current market price")
+        if self._paper_mode and action.action in (ActionType.REDUCE_POSITION, ActionType.ADD_TO_POSITION):
+            return ExecutionResult(success=False, action=action.action.value, symbol=action.symbol,
+                                   side="", error="Partial position changes are not supported in paper mode")
+        if self._paper_mode and action.action in (ActionType.OPEN_LONG, ActionType.OPEN_SHORT) and self._pm.get_position(action.symbol):
+            return ExecutionResult(success=False, action=action.action.value, symbol=action.symbol,
+                                   side="", error="Position already open")
         try:
             if action.action == ActionType.OPEN_LONG:
                 return await self._open_position(action, validation, current_price, equity, "buy", confidence=confidence, max_holding_s=max_holding_s)

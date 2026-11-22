@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
+from numbers import Real
 
 from src.analysis.frac_diff import find_min_d, frac_diff_ffd
 from src.analysis.indicators import IndicatorSummary, compute_indicators, ohlcv_list_to_df
@@ -465,8 +467,9 @@ class ContextBuilder:
                 direction = "longs pay" if rate > 0 else "shorts pay"
                 parts.append(f"Funding: {rate*100:.4f}% ({direction}, ~{ann:.1f}% ann)")
             if s.open_interest:
-                oi = s.open_interest.get("open_interest_value", 0)
-                parts.append(f"OI: ${oi:,.0f}")
+                oi = s.open_interest.get("open_interest_value")
+                if isinstance(oi, Real) and isfinite(oi):
+                    parts.append(f"OI: ${oi:,.0f}")
             if s.cross_exchange_funding:
                 rates_str = ", ".join(
                     f"{ex}={r*100:.4f}%" for ex, r in s.cross_exchange_funding.items()

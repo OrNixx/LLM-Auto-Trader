@@ -1,6 +1,7 @@
 """Structured logging setup for the trading bot."""
 
 import logging
+import logging.handlers
 import sys
 from pathlib import Path
 
@@ -10,7 +11,7 @@ import structlog
 def setup_logging(log_dir: str = "logs", level: str = "INFO") -> None:
     """Configure structured logging to console and file."""
     log_path = Path(log_dir)
-    log_path.mkdir(exist_ok=True)
+    log_path.mkdir(parents=True, exist_ok=True)
 
     # Configure stdlib logging for third-party libs
     logging.basicConfig(

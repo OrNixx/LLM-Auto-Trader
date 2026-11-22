@@ -221,8 +221,8 @@ class MarketDataCollector:
             oi = await self.trading_exchange.fetch_open_interest(symbol)
             return {
                 "symbol": symbol,
-                "open_interest": oi.get("openInterestAmount", 0),
-                "open_interest_value": oi.get("openInterestValue", 0),
+                "open_interest": oi.get("openInterestAmount"),
+                "open_interest_value": oi.get("openInterestValue"),
                 "timestamp": time.time(),
             }
         except Exception as e:

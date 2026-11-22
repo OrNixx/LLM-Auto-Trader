@@ -235,7 +235,7 @@ class Database:
 
     # --- Trades ---
 
-    async def save_trade(self, trade: dict, llm_call_id: int | None = None) -> int:
+    async def save_trade(self, trade: dict, llm_call_id: int | None = None, *, commit: bool = True) -> int:
         """Save a completed trade (including AFML triple-barrier fields if present)."""
         cursor = await self.db.execute(
             "INSERT INTO trades "
@@ -258,7 +258,8 @@ class Database:
                 trade.get("max_holding_s"), trade.get("llm_confidence"),
             ),
         )
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
         return cursor.lastrowid
 
     async def get_recent_trades(self, limit: int = 20) -> list[dict]:

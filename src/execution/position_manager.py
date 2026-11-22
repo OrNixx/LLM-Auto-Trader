@@ -122,8 +122,10 @@ class Position:
 class PositionManager:
     """Manages all open positions and portfolio-level state."""
 
-    def __init__(self):
+    def __init__(self, record_closed_trades: bool = False):
+        self._record_closed_trades = record_closed_trades
         self._positions: dict[str, Position] = {}  # symbol -> Position
+        self.closed_trades: list[dict] = []
         self._peak_equity: float = 0
         self._starting_equity: float = 0
 
@@ -257,6 +259,8 @@ class PositionManager:
             "position_closed",
             **{k: v for k, v in trade.items() if k != "reasoning"},
         )
+        if self._record_closed_trades:
+            self.closed_trades.append(trade)
         return trade
 
     def update_prices(self, prices: dict[str, float]) -> None:

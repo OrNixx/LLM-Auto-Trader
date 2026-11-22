@@ -174,7 +174,7 @@ Check your exchange's actual fee schedule and margin tier table.
 
 **Live trading vs. paper.** The default is paper mode. To go live, set
 `BOT_MODE=live` AND provide `EXCHANGE_API_KEY` / `EXCHANGE_API_SECRET`.
-For paper mode you don't need exchange keys at all — only an LLM key.
+Paper mode does not require exchange keys. Local OpenAI-compatible servers may also run without an LLM key.
 
 ---
 
@@ -296,7 +296,7 @@ Defaults are conservative on purpose.
 
 | Env var               | Default     | What it does                                                                |
 |-----------------------|-------------|------------------------------------------------------------------------------|
-| `REBALANCE_CADENCE`   | `adaptive`  | `daily`, `hourly`, `adaptive`, or any 5-field cron expression               |
+| `REBALANCE_CADENCE`   | `adaptive`  | `daily`, `hourly`, or `adaptive`               |
 
 `adaptive` lets the LLM pick its own next-check interval (constrained to
 [15, 60] minutes by default). `daily` and `hourly` are simpler and cheaper.
@@ -329,7 +329,7 @@ fast markets, partial fills happen, and exchanges go down. Treat
 paper-mode P&L as an upper bound, not a forecast.
 
 **Fixed vs. adaptive cadence.**
-- *Fixed* (`daily`, `hourly`, cron): predictable cost, predictable
+- *Fixed* (`daily`, `hourly`): predictable cost, predictable
   responsiveness, can miss fast-moving setups.
 - *Adaptive*: the LLM picks `next_check_minutes`. More expensive when
   active, cheaper when sleeping. Can spike if the LLM systematically
@@ -524,7 +524,7 @@ training-cutoff is the final clean check.
 ## Troubleshooting
 
 **`LLM API key required for provider 'anthropic'`**
-You haven't set `LLM_API_KEY` (or `ANTHROPIC_API_KEY`). Even paper mode
+You haven't set `LLM_API_KEY` (or `ANTHROPIC_API_KEY`). For hosted providers, paper mode
 needs the LLM key — that's what makes the decisions.
 
 **`set_leverage_unsupported` warning**
@@ -553,3 +553,45 @@ funding-rate surges. Compare paper P&L to real-mode P&L on tiny capital
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+
+### Docker paper trading with llama.cpp
+
+The compose service runs `scripts.paper_trade`, which always forces paper mode.
+Example `.env` (adjust host/port and model ID to match `/v1/models`):
+
+```dotenv
+BOT_MODE=paper
+EXCHANGE_NAME=bybit
+EXCHANGE_API_KEY=
+EXCHANGE_API_SECRET=
+DATA_EXCHANGES=bybit
+LLM_PROVIDER=openai-compat
+LLM_MODEL=RVN-Q6_K-multilingual-mtp.gguf
+LLM_BASE_URL=http://host.docker.internal:8080/v1
+LLM_API_KEY=
+LLM_TIMEOUT_SECONDS=300
+REBALANCE_CADENCE=daily
+PAPER_INITIAL_BALANCE=10000
+DB_PATH=/app/data/trading_bot.db
+LOG_DIR=/app/logs
+```
+
+The GGUF path is used by llama-server, not mounted into the bot. The server
+must listen on an address reachable from Docker; `localhost` inside the bot is
+the bot container. Use the server's model alias or ID, not necessarily its file
+path. Set `LLM_API_KEY` only if the server requires it. The bot requests ordinary
+chat completions and validates JSON locally; constrained JSON is not requested.
+Daily means 24 hours between attempts while the process runs, not a fixed
+clock time; a restart triggers a new initial attempt. Risk checks continue between
+analyses. Paper account state and closed trades are stored in SQLite. Initial
+balance only applies to a new database. Paper add/reduce actions are rejected
+because partial-fill accounting is not implemented. Exchange credentials are
+not passed to the paper market connections.
+
+Bybit defaults to USDT-margined perpetual swaps and strategy leverage up to 5x.
+Only configured perpetual symbols found in loaded markets are selected; the
+documented spot fallbacks are not used by the running bot. Simulated fills,
+funding, fees and risk controls are approximations; do not treat paper P&L as
+actual results. Keep DB_PATH and LOG_DIR inside the mounted directories and
+ensure the host directories are writable by the container.

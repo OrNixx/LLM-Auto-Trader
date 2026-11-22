@@ -79,6 +79,7 @@ class WebSocketManager:
         self._market_type = market_type
         self._exchange: ccxtpro.Exchange | None = None
         self._running = False
+        self._started_at = 0.0
         self._price_states: dict[str, PriceState] = {}
         self._callbacks: list[PriceCallback] = []
         self._tasks: list[asyncio.Task] = []
@@ -105,6 +106,7 @@ class WebSocketManager:
             await self.initialize()
 
         self._running = True
+        self._started_at = time.time()
         for symbol in symbols:
             self._price_states[symbol] = PriceState(symbol=symbol)
             task = asyncio.create_task(self._watch_ticker(symbol))
@@ -146,8 +148,7 @@ class WebSocketManager:
                 log.error("ws_ticker_error", symbol=symbol, error=str(e),
                           consecutive=consecutive_errors)
                 if consecutive_errors > 10:
-                    log.critical("ws_too_many_errors", symbol=symbol)
-                    break
+                    log.error("ws_retrying_after_errors", symbol=symbol)
                 await asyncio.sleep(min(2 ** consecutive_errors, 30))
 
     def get_price_state(self, symbol: str) -> PriceState | None:
@@ -174,8 +175,8 @@ class WebSocketManager:
         """Seconds since last price update from any symbol."""
         if not self._price_states:
             return float("inf")
-        latest = max(s.last_update for s in self._price_states.values())
-        return time.time() - latest
+        latest = max((s.last_update for s in self._price_states.values()), default=0)
+        return time.time() - (latest or self._started_at) if self._started_at else float("inf")
 
     async def stop(self) -> None:
         """Stop all WebSocket streams."""
