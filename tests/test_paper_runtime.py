@@ -85,3 +85,16 @@ async def test_compat_bad_response_is_provider_error(monkeypatch):
     provider = OpenAICompatProvider(api_key="", model="test", base_url="http://llama:8080/v1")
     with pytest.raises(LLMProviderError):
         await provider.complete(system="s", user="u", max_output_tokens=20)
+
+
+def test_fixed_five_minute_cadence(monkeypatch):
+    monkeypatch.setattr("src.llm.scheduler.time.time", lambda: 10000)
+    scheduler = LLMScheduler(cadence="5m")
+    assert scheduler.should_call()
+    scheduler.record_call()
+    scheduler.set_llm_interval(60)
+    scheduler.force_next_call()
+    assert not scheduler.should_call()
+    assert scheduler.get_next_call_in() == 300
+    monkeypatch.setattr("src.llm.scheduler.time.time", lambda: 10300)
+    assert scheduler.should_call()

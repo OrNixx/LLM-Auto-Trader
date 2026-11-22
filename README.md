@@ -296,7 +296,7 @@ Defaults are conservative on purpose.
 
 | Env var               | Default     | What it does                                                                |
 |-----------------------|-------------|------------------------------------------------------------------------------|
-| `REBALANCE_CADENCE`   | `adaptive`  | `daily`, `hourly`, or `adaptive`               |
+| `REBALANCE_CADENCE`   | `adaptive`  | `5m`, `daily`, `hourly`, or `adaptive`               |
 
 `adaptive` lets the LLM pick its own next-check interval (constrained to
 [15, 60] minutes by default). `daily` and `hourly` are simpler and cheaper.
@@ -329,7 +329,7 @@ fast markets, partial fills happen, and exchanges go down. Treat
 paper-mode P&L as an upper bound, not a forecast.
 
 **Fixed vs. adaptive cadence.**
-- *Fixed* (`daily`, `hourly`): predictable cost, predictable
+- *Fixed* (`5m`, `daily`, `hourly`): predictable cost, predictable
   responsiveness, can miss fast-moving setups.
 - *Adaptive*: the LLM picks `next_check_minutes`. More expensive when
   active, cheaper when sleeping. Can spike if the LLM systematically

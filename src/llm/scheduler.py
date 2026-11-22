@@ -9,6 +9,9 @@ from src.utils.logger import get_logger
 log = get_logger(__name__)
 
 
+FIXED_INTERVALS = {"5m": 300, "hourly": 3600, "daily": 86400}
+
+
 class LLMScheduler:
     """Controls when to make LLM API calls using adaptive frequency.
 
@@ -27,7 +30,7 @@ class LLMScheduler:
         cadence: str = "adaptive",
     ):
         self.cadence = cadence
-        if cadence not in ("adaptive", "daily", "hourly"):
+        if cadence != "adaptive" and cadence not in FIXED_INTERVALS:
             raise ValueError(f"Unsupported cadence: {cadence}")
         self.base_interval = base_interval
         self.min_interval = min_interval
@@ -78,7 +81,7 @@ class LLMScheduler:
         """
         elapsed = self.seconds_since_last_call
         if self.cadence != "adaptive":
-            return elapsed >= (86400 if self.cadence == "daily" else 3600)
+            return elapsed >= FIXED_INTERVALS[self.cadence]
 
         # Force call (event-driven trigger)
         if self._force_next and elapsed >= self.min_interval:
@@ -132,7 +135,7 @@ class LLMScheduler:
     ) -> float:
         """Get seconds until next call should happen."""
         if self.cadence != "adaptive":
-            return max(0, (86400 if self.cadence == "daily" else 3600) - self.seconds_since_last_call)
+            return max(0, FIXED_INTERVALS[self.cadence] - self.seconds_since_last_call)
         if self._force_next:
             return max(0, self.min_interval - self.seconds_since_last_call)
 

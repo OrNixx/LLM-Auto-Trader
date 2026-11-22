@@ -229,8 +229,8 @@ class SchedulerSettings:
     cadence: str = field(
         default_factory=lambda: _env("REBALANCE_CADENCE", default="adaptive").lower()
     )
-    """One of ``"daily"``, ``"hourly"``, ``"adaptive"``, or a 5-field cron
-    expression. ``"adaptive"`` lets the LLM choose its own next-check interval
+    """One of ``"5m"``, ``"daily"``, ``"hourly"``, or ``"adaptive"``.
+    ``"adaptive"`` lets the LLM choose its own next-check interval
     within ``[adaptive_min_minutes, adaptive_max_minutes]``."""
 
     adaptive_min_minutes: int = 15
@@ -452,8 +452,8 @@ class Settings:
                 "Exchange API key required for live trading. Set "
                 "EXCHANGE_API_KEY (or the legacy MEXC_API_KEY) in your .env."
             )
-        if self.scheduler.cadence not in ("adaptive", "daily", "hourly"):
-            errors.append("REBALANCE_CADENCE must be adaptive, daily, or hourly")
+        if self.scheduler.cadence not in ("adaptive", "daily", "hourly", "5m"):
+            errors.append("REBALANCE_CADENCE must be adaptive, 5m, daily, or hourly")
         if self.paper_initial_balance <= 0:
             errors.append("PAPER_INITIAL_BALANCE must be positive")
         if not self.llm.api_key and self.llm.provider not in ("openai-compat", "openai_compat", "ollama", "vllm"):
