@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+import pandas as pd
 import yfinance as yf
 
 from src.utils.logger import get_logger
@@ -79,9 +81,20 @@ class MacroCollector:
                 if data.empty or len(data) < 2:
                     continue
 
-                current = float(data["Close"].iloc[-1])
-                prev = float(data["Close"].iloc[-2])
-                change_pct = ((current - prev) / prev * 100) if prev else 0
+                close = data["Close"]
+                # yfinance can return MultiIndex columns even for one ticker.
+                if isinstance(close, pd.DataFrame):
+                    if ticker_symbol in close.columns:
+                        close = close[ticker_symbol]
+                    elif len(close.columns) == 1:
+                        close = close.iloc[:, 0]
+                    else:
+                        raise ValueError("Ambiguous Close columns")
+                current = float(close.iloc[-1])
+                prev = float(close.iloc[-2])
+                if not math.isfinite(current) or not math.isfinite(prev) or prev == 0:
+                    raise ValueError("Missing or invalid closing prices")
+                change_pct = (current - prev) / prev * 100
 
                 snapshot.indicators[name] = MacroIndicator(
                     name=name,
