@@ -174,3 +174,23 @@ async def test_incomplete_position_history_is_not_used(monkeypatch):
     import pytest
     with pytest.raises(ValueError, match="pagination limit"):
         await collector._positions("user", "CLOSED")
+
+
+async def test_position_history_exceeding_1000_is_fully_paginated(monkeypatch):
+    from src.data.top_traders import TopTraderCollector
+
+    collector = TopTraderCollector()
+    requests = []
+
+    async def get_json(url, params):
+        requests.append(dict(params))
+        if "cursor" not in params:
+            return {"data": [{}] * 1000,
+                    "pagination": {"next_cursor": "page2", "has_more": True}}
+        return {"data": [{}] * 25,
+                "pagination": {"next_cursor": None, "has_more": False}}
+
+    monkeypatch.setattr(collector, "_get_json", get_json)
+    assert len(await collector._positions("user", "CLOSED")) == 1025
+    assert requests[0]["limit"] == 1000
+    assert requests[1]["cursor"] == "page2"

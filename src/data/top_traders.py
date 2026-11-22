@@ -182,7 +182,7 @@ class TopTraderCollector:
         rows = []
         cursor = None
         for _ in range(10):
-            params = {"user": user, "status": status, "limit": 100}
+            params = {"user": user, "status": status, "limit": 1000}
             if cursor:
                 params["cursor"] = cursor
             page = await self._get_json(self.POSITIONS_API, params)
