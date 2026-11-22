@@ -595,3 +595,11 @@ documented spot fallbacks are not used by the running bot. Simulated fills,
 funding, fees and risk controls are approximations; do not treat paper P&L as
 actual results. Keep DB_PATH and LOG_DIR inside the mounted directories and
 ensure the host directories are writable by the container.
+
+
+To inspect each model request and its raw text response, set `LOG_LEVEL=DEBUG`
+and recreate the container. Events `llm_request` and `llm_response` include
+retries; request events contain the system and user prompts, token limit and
+temperature. Logs go to both Docker logs and `LOG_DIR/bot.log`. They can
+contain account and position details and grow quickly; use `INFO` when done.
+The database stores the validated response, not the full request or raw output.

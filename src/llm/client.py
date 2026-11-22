@@ -157,6 +157,11 @@ class TradingLLMClient:
         return result
 
     async def _call_api(self, user_prompt: str) -> str:
+        log.debug(
+            "llm_request", model=self.model, system=self._system_prompt,
+            user=user_prompt, max_output_tokens=self._max_output_tokens,
+            temperature=self._temperature,
+        )
         try:
             res = await self._provider.complete(
                 system=self._system_prompt,
@@ -170,6 +175,8 @@ class TradingLLMClient:
         except LLMProviderError as e:
             self._consecutive_failures += 1
             raise LLMParseError(str(e)) from e
+
+        log.debug("llm_response", model=res.model, text=res.text)
 
         self.cost_tracker.record_call(
             input_tokens=res.usage.input_tokens,
