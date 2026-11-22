@@ -135,3 +135,42 @@ class TestTopTrader:
         snap = TopTradersSnapshot()
         assert snap.traders == []
         assert snap.consensus == []
+
+
+async def test_v2_leaderboard_enrichment_and_consensus(monkeypatch):
+    from src.data.top_traders import TopTraderCollector
+
+    collector = TopTraderCollector()
+
+    async def get_json(url, params):
+        if url == collector.POLYMARKET_PROFILE_API:
+            return {"data": [{"user_id": "a", "user_name": "Alice"},
+                             {"user_id": "b", "user_name": "Bob"}]}
+        if url == collector.USER_STATS_API:
+            return {"data": {"all_time_pnl": {"trade_count": 100, "realized_market_pnl": 20000}}}
+        if params["status"] == "CLOSED":
+            return {"data": [{"condition_id": "old", "realized_pnl": 20}],
+                    "pagination": {"next_cursor": None, "has_more": False}}
+        return {"data": [{"condition_id": "market", "title": "BTC?", "outcome": "Yes",
+                          "current_price": 0.6, "current_value": 100}],
+                "pagination": {"next_cursor": None, "has_more": False}}
+
+    monkeypatch.setattr(collector, "_get_json", get_json)
+    snapshot = await collector.collect()
+    assert [trader.username for trader in snapshot.traders] == ["Alice", "Bob"]
+    assert snapshot.consensus[0].bullish_count == 2
+
+
+async def test_incomplete_position_history_is_not_used(monkeypatch):
+    from src.data.top_traders import TopTraderCollector
+
+    collector = TopTraderCollector()
+
+    async def get_json(url, params):
+        return {"data": [{"condition_id": "x", "realized_pnl": 10}],
+                "pagination": {"next_cursor": "next", "has_more": True}}
+
+    monkeypatch.setattr(collector, "_get_json", get_json)
+    import pytest
+    with pytest.raises(ValueError, match="pagination limit"):
+        await collector._positions("user", "CLOSED")

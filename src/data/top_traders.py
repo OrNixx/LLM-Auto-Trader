@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from dataclasses import dataclass, field
@@ -26,6 +27,7 @@ class TraderPosition:
     side: str           # "yes" | "no"
     size_usd: float | None = None
     current_odds: float = 0.5
+    condition_id: str = ""
 
 
 @dataclass
@@ -83,7 +85,7 @@ def compute_consensus(traders: list[TopTrader]) -> list[TraderConsensus]:
     market_positions: dict[str, list[tuple[TopTrader, TraderPosition]]] = {}
     for trader in traders:
         for pos in trader.active_positions:
-            key = pos.market_question.strip().lower()
+            key = pos.condition_id or pos.market_question.strip().lower()
             market_positions.setdefault(key, []).append((trader, pos))
 
     consensus_list: list[TraderConsensus] = []
@@ -134,7 +136,9 @@ class TopTraderCollector:
     """Fetches top trader data from Polymarket analytics."""
 
     # Polymarket profile API (public)
-    POLYMARKET_PROFILE_API = "https://gamma-api.polymarket.com/leaderboard"
+    POLYMARKET_PROFILE_API = "https://data-api.polymarket.com/v2/leaderboard"
+    POSITIONS_API = "https://data-api.polymarket.com/v2/positions"
+    USER_STATS_API = "https://data-api.polymarket.com/v2/user-stats"
 
     def __init__(self, session: aiohttp.ClientSession | None = None):
         self._session = session
@@ -163,53 +167,105 @@ class TopTraderCollector:
             consensus=consensus,
         )
 
-    async def _fetch_top_traders(self) -> list[TopTrader]:
-        """Fetch top traders from Polymarket leaderboard API."""
+    async def _get_json(self, url: str, params: dict) -> dict:
         session = await self._get_session()
-        traders: list[TopTrader] = []
+        async with session.get(url, params=params) as resp:
+            if resp.status != 200:
+                raise ValueError(f"HTTP {resp.status} from {url}")
+            data = await resp.json()
+            if not isinstance(data, dict):
+                raise ValueError("Unexpected Polymarket response")
+            return data
 
+    async def _positions(self, user: str, status: str) -> list[dict]:
+        # Never calculate a win rate or consensus from a truncated page.
+        rows = []
+        cursor = None
+        for _ in range(10):
+            params = {"user": user, "status": status, "limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            page = await self._get_json(self.POSITIONS_API, params)
+            data = page.get("data")
+            if not isinstance(data, list):
+                raise ValueError("Missing positions data")
+            rows.extend(data)
+            pagination = page.get("pagination")
+            if not isinstance(pagination, dict):
+                raise ValueError("Missing positions pagination")
+            cursor = pagination.get("next_cursor")
+            if not cursor:
+                if pagination.get("has_more"):
+                    raise ValueError("Missing positions cursor")
+                return rows
+        raise ValueError("Positions exceed pagination limit")
+
+    async def _fetch_top_traders(self) -> list[TopTrader]:
+        """Enrich the leaderboard with verified account statistics and positions."""
         try:
-            # Polymarket Gamma API leaderboard endpoint
-            url = self.POLYMARKET_PROFILE_API
-            params = {"limit": 50, "window": "all"}
-            async with session.get(url, params=params) as resp:
-                if resp.status != 200:
-                    log.warning("top_traders_api_error", status=resp.status)
-                    return []
-                data = await resp.json()
-
-            items = data if isinstance(data, list) else data.get("leaderboard", data.get("data", []))
-            for item in items:
-                username = item.get("username", "") or item.get("name", "") or item.get("address", "")[:8]
-                profit = float(item.get("pnl", 0) or item.get("profit", 0) or 0)
-                trades_count = int(item.get("numTrades", 0) or item.get("trades_count", 0) or 0)
-                markets_won = int(item.get("marketsWon", 0) or 0)
-                markets_traded = int(item.get("marketsTraded", 0) or item.get("markets_count", 0) or 0)
-
-                win_rate = markets_won / markets_traded if markets_traded > 0 else 0.0
-
-                # Positions may or may not be included
-                positions: list[TraderPosition] = []
-                for pos in item.get("positions", item.get("active_positions", [])):
-                    positions.append(TraderPosition(
-                        market_question=pos.get("title", "") or pos.get("question", ""),
-                        side=pos.get("side", "yes").lower(),
-                        size_usd=float(pos.get("size", 0) or 0),
-                        current_odds=float(pos.get("price", 0.5) or 0.5),
-                    ))
-
-                traders.append(TopTrader(
-                    username=username,
-                    profit_total=profit,
-                    win_rate=round(win_rate, 4),
-                    total_trades=trades_count or markets_traded,
-                    active_positions=positions,
-                ))
-
+            result = await self._get_json(self.POLYMARKET_PROFILE_API, {"limit": 50})
+            items = result.get("data")
+            if not isinstance(items, list):
+                raise ValueError("Missing leaderboard data")
         except Exception as e:
             log.warning("top_traders_fetch_error", error=str(e))
+            return []
 
-        return traders
+        semaphore = asyncio.Semaphore(5)
+
+        async def enrich(item: dict) -> TopTrader | None:
+            async with semaphore:
+                try:
+                    user = item["user_id"]
+                    stats_response = await self._get_json(self.USER_STATS_API, {"user": user})
+                    stats = stats_response["data"]
+                    all_time = stats["all_time_pnl"]
+                    trades = int(all_time["trade_count"])
+                    profit = float(all_time["realized_market_pnl"])
+                    if not math.isfinite(profit) or trades < MIN_TRADES or profit < MIN_PROFIT:
+                        return None
+                    closed = await self._positions(user, "CLOSED")
+                    # A closed market is a win when its combined realized PnL
+                    # across outcome positions is positive. This is not a
+                    # prediction-resolution win rate.
+                    by_market: dict[str, float] = {}
+                    for pos in closed:
+                        condition = pos["condition_id"]
+                        pnl = float(pos["realized_pnl"])
+                        if not condition or not math.isfinite(pnl):
+                            raise ValueError("Invalid closed position")
+                        by_market[condition] = by_market.get(condition, 0.0) + pnl
+                    if not by_market:
+                        return None
+                    win_rate = sum(pnl > 0 for pnl in by_market.values()) / len(by_market)
+                    if win_rate < MIN_WIN_RATE:
+                        return None
+                    open_positions = await self._positions(user, "OPEN")
+                    positions = []
+                    for pos in open_positions:
+                        outcome = str(pos.get("outcome", "")).lower()
+                        # Named outcomes (e.g. teams) are not YES/NO signals.
+                        if outcome not in ("yes", "no"):
+                            continue
+                        price = float(pos["current_price"])
+                        size = float(pos["current_value"])
+                        if not (math.isfinite(price) and 0 <= price <= 1 and math.isfinite(size) and size > 0):
+                            continue
+                        if not pos.get("condition_id") or not pos.get("title"):
+                            continue
+                        positions.append(TraderPosition(
+                            market_question=pos["title"], side=outcome,
+                            size_usd=size, current_odds=price, condition_id=pos["condition_id"],
+                        ))
+                    return TopTrader(username=item.get("user_name") or user,
+                                     profit_total=profit, win_rate=win_rate,
+                                     total_trades=trades, active_positions=positions)
+                except (KeyError, TypeError, ValueError, aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    log.warning("top_trader_enrichment_failed", error=str(e))
+                    return None
+
+        enriched = await asyncio.gather(*(enrich(item) for item in items if isinstance(item, dict)))
+        return [trader for trader in enriched if trader is not None]
 
     async def close(self) -> None:
         if self._owns_session and self._session:
