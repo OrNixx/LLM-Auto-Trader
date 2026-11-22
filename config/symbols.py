@@ -51,6 +51,7 @@ TRADING_SYMBOLS: list[SymbolConfig] = [
         asset_class="crypto",
         max_leverage=5,
         priority=2,
+        enabled=False,
     ),
     SymbolConfig(
         symbol="PAXG/USDT:USDT",
@@ -58,6 +59,7 @@ TRADING_SYMBOLS: list[SymbolConfig] = [
         asset_class="commodity",
         max_leverage=3,
         priority=2,
+        enabled=False,
     ),
 ]
 
