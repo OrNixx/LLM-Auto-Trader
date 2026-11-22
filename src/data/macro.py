@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -14,6 +15,18 @@ import yfinance as yf
 from src.utils.logger import get_logger
 
 log = get_logger(__name__)
+
+# pandas 3.1 warns about yfinance's internal use of inplace=True on every
+# download. Keep other pandas and yfinance warnings visible. Older pandas
+# versions do not define Pandas4Warning.
+_pandas4_warning = getattr(pd.errors, "Pandas4Warning", None)
+if _pandas4_warning is not None:
+    warnings.filterwarnings(
+        "ignore",
+        message=r"The inplace keyword in DataFrame\.(?:sort_index|drop|rename) is deprecated.*",
+        category=_pandas4_warning,
+        module=r"^yfinance(?:\.|$)",
+    )
 
 MACRO_TICKERS = {
     "dxy": "DX-Y.NYB",

@@ -28,3 +28,22 @@ def test_missing_close_is_not_reported_as_data(monkeypatch):
         assert not collector._fetch_all().indicators
     finally:
         collector.close()
+
+
+def test_only_yfinance_inplace_deprecation_is_suppressed():
+    import importlib
+    import warnings
+
+    import src.data.macro as macro
+
+    warning_type = getattr(pd.errors, "Pandas4Warning", None)
+    if warning_type is None:
+        pytest.skip("Pandas4Warning is unavailable in this pandas version")
+    message = "The inplace keyword in DataFrame.drop is deprecated and will be removed"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        importlib.reload(macro)
+        warnings.warn_explicit(message, warning_type, "utils.py", 1, module="yfinance.utils")
+        warnings.warn_explicit(message, warning_type, "other.py", 1, module="other")
+        warnings.warn_explicit("different warning", warning_type, "utils.py", 2, module="yfinance.utils")
+    assert [str(item.message) for item in caught] == [message, "different warning"]
